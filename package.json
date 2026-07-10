@@ -1,0 +1,9 @@
+{
+  "name": "nifti-segmentation-viewer",
+  "version": "1.0.0",
+  "description": "Zero-install browser viewer for NIfTI volumes with segmentation overlays, powered by niivue.",
+  "private": true,
+  "scripts": {
+    "start": "python3 -m http.server 8000"
+  }
+}

@@ -1,0 +1,3 @@
+# Classify the generated viewer page as Python for language stats,
+# since index.html is produced by generate.py.
+index.html linguist-language=Python

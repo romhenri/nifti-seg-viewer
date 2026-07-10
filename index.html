@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NIfTI viewer</title>
+  <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'&gt;&lt;text y='14' font-size='14'&gt;🧠&lt;/text&gt;&lt;/svg&gt;" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    #controls { padding: 8px 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    #controls label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+    #controls input[type=file] { color: #eee; font-size: 12px; }
+    #gl { display: block; width: 100vw; height: calc(100vh - 48px); }
+    button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #444; }
+    #hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #777; font-size: 14px; text-align: center; pointer-events: none; }
+    #hint small { color: #555; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>Base: <input type="file" id="baseFile" accept=".nii,.nii.gz" /></label>
+    <label>Overlay: <input type="file" id="overlayFile" accept=".nii,.nii.gz" /></label>
+    <label>Slice type:
+      <select id="sliceType">
+        <option value="0">Axial</option>
+        <option value="1">Coronal</option>
+        <option value="2">Sagittal</option>
+        <option value="3" selected>Multiplanar</option>
+        <option value="4">Render</option>
+      </select>
+    </label>
+  </div>
+  <canvas id="gl"></canvas>
+  <div id="hint">
+    Load a base NIfTI volume to start<br />
+    <small>Everything runs locally &mdash; your data never leaves the browser.</small>
+  </div>
+
+  <script src="https://unpkg.com/@niivue/niivue@0.69.0/dist/niivue.umd.js"></script>
+  <script>
+    const { Niivue } = niivue;
+    const nv = new Niivue({ backColor: [0.07, 0.07, 0.07, 1], show3Dcrosshair: true });
+    nv.attachTo('gl');
+
+    const hint = document.getElementById('hint');
+    const hideHint = () => { hint.style.display = 'none'; };
+
+    const sliceMap = { 0: nv.sliceTypeAxial, 1: nv.sliceTypeCoronal, 2: nv.sliceTypeSagittal, 3: nv.sliceTypeMultiplanar, 4: nv.sliceTypeRender };
+    document.getElementById('sliceType').addEventListener('change', (e) => {
+      nv.setSliceType(sliceMap[e.target.value]);
+    });
+    nv.setSliceType(nv.sliceTypeMultiplanar);
+
+    function fileToVolume(file, opts = {}) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ name: file.name, buffer: reader.result, ...opts });
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    document.getElementById('baseFile').addEventListener('change', async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try {
+        const vol = await fileToVolume(f, { colormap: 'gray', opacity: 1 });
+        await nv.loadVolumes([vol]);
+        hideHint();
+      } catch (err) {
+        alert('Could not load base volume: ' + err.message);
+      }
+    });
+
+    document.getElementById('overlayFile').addEventListener('change', async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      if (nv.volumes.length === 0) {
+        alert('Load a base volume first.');
+        e.target.value = '';
+        return;
+      }
+      try {
+        // Drop any previous overlay so re-selecting replaces rather than stacks.
+        while (nv.volumes.length > 1) {
+          nv.removeVolumeByIndex(nv.volumes.length - 1);
+        }
+        const overlay = await fileToVolume(f, { colormap: 'redyell', opacity: 0.6, cal_min: 0.5, cal_max: 1 });
+        await nv.addVolume(overlay);
+        hideHint();
+      } catch (err) {
+        alert('Could not load overlay: ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>
