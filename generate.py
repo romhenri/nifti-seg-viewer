@@ -12,7 +12,9 @@ from pathlib import Path
 
 NIIVUE_VERSION = "0.69.0"
 
-HTML = f"""\
+# Plain (non f-string) template so the JavaScript block can use braces freely.
+# The niivue version is injected via a single token replacement.
+HTML = """\
 <!doctype html>
 <html>
 <head>
@@ -21,16 +23,16 @@ HTML = f"""\
   <title>NIfTI viewer</title>
   <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'&gt;&lt;text y='14' font-size='14'&gt;🧠&lt;/text&gt;&lt;/svg&gt;" />
   <style>
-    html, body {{ margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }}
-    #controls {{ padding: 8px 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
-    #controls label {{ display: flex; gap: 6px; align-items: center; font-size: 13px; }}
-    #controls input[type=file] {{ color: #eee; font-size: 12px; }}
-    #gl {{ display: block; width: 100vw; height: calc(100vh - 48px); }}
-    button {{ background: #333; color: #eee; border: 1px solid #555; padding: 4px 10px; border-radius: 4px; cursor: pointer; }}
-    button:hover {{ background: #444; }}
-    #hint {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      color: #777; font-size: 14px; text-align: center; pointer-events: none; }}
-    #hint small {{ color: #555; }}
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    #controls { padding: 8px 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    #controls label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+    #controls input[type=file] { color: #eee; font-size: 12px; }
+    #gl { display: block; width: 100vw; height: calc(100vh - 48px); }
+    button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #444; }
+    #hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #777; font-size: 14px; text-align: center; pointer-events: none; }
+    #hint small { color: #555; }
   </style>
 </head>
 <body>
@@ -53,64 +55,66 @@ HTML = f"""\
     <small>Everything runs locally &mdash; your data never leaves the browser.</small>
   </div>
 
-  <script src="https://unpkg.com/@niivue/niivue@{NIIVUE_VERSION}/dist/niivue.umd.js"></script>
+  <script src="https://unpkg.com/@niivue/niivue@__NIIVUE_VERSION__/dist/niivue.umd.js"></script>
   <script>
-    const {{ Niivue }} = niivue;
-    const nv = new Niivue({{ backColor: [0.07, 0.07, 0.07, 1], show3Dcrosshair: true }});
+    const { Niivue } = niivue;
+    const nv = new Niivue({ backColor: [0.07, 0.07, 0.07, 1], show3Dcrosshair: true });
     nv.attachTo('gl');
 
     const hint = document.getElementById('hint');
-    const hideHint = () => {{ hint.style.display = 'none'; }};
+    const hideHint = () => { hint.style.display = 'none'; };
 
-    const sliceMap = {{ 0: nv.sliceTypeAxial, 1: nv.sliceTypeCoronal, 2: nv.sliceTypeSagittal, 3: nv.sliceTypeMultiplanar, 4: nv.sliceTypeRender }};
-    document.getElementById('sliceType').addEventListener('change', (e) => {{
+    const sliceMap = { 0: nv.sliceTypeAxial, 1: nv.sliceTypeCoronal, 2: nv.sliceTypeSagittal, 3: nv.sliceTypeMultiplanar, 4: nv.sliceTypeRender };
+    document.getElementById('sliceType').addEventListener('change', (e) => {
       nv.setSliceType(sliceMap[e.target.value]);
-    }});
+    });
     nv.setSliceType(nv.sliceTypeMultiplanar);
 
-    function fileToVolume(file, opts = {{}}) {{
-      return new Promise((resolve, reject) => {{
+    function fileToVolume(file, opts = {}) {
+      return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve({{ name: file.name, buffer: reader.result, ...opts }});
+        reader.onload = () => resolve({ name: file.name, buffer: reader.result, ...opts });
         reader.onerror = reject;
         reader.readAsArrayBuffer(file);
-      }});
-    }}
+      });
+    }
 
-    document.getElementById('baseFile').addEventListener('change', async (e) => {{
+    document.getElementById('baseFile').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
-      try {{
-        const vol = await fileToVolume(f, {{ colormap: 'gray', opacity: 1 }});
+      try {
+        const vol = await fileToVolume(f, { colormap: 'gray', opacity: 1 });
         await nv.loadVolumes([vol]);
         hideHint();
-      }} catch (err) {{
+      } catch (err) {
         alert('Could not load base volume: ' + err.message);
-      }}
-    }});
+      }
+    });
 
-    document.getElementById('overlayFile').addEventListener('change', async (e) => {{
+    document.getElementById('overlayFile').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
-      if (nv.volumes.length === 0) {{
+      if (nv.volumes.length === 0) {
         alert('Load a base volume first.');
         e.target.value = '';
         return;
-      }}
-      try {{
+      }
+      try {
         // Drop any previous overlay so re-selecting replaces rather than stacks.
-        while (nv.volumes.length > 1) {{
+        while (nv.volumes.length > 1) {
           nv.removeVolumeByIndex(nv.volumes.length - 1);
-        }}
-        const overlay = await fileToVolume(f, {{ colormap: 'redyell', opacity: 0.6, cal_min: 0.5, cal_max: 1 }});
+        }
+        const overlay = await fileToVolume(f, { colormap: 'redyell', opacity: 0.6, cal_min: 0.5, cal_max: 1 });
         await nv.addVolume(overlay);
         hideHint();
-      }} catch (err) {{
+      } catch (err) {
         alert('Could not load overlay: ' + err.message);
-      }}
-    }});
+      }
+    });
   </script>
 </body>
 </html>
 """
+
+HTML = HTML.replace("__NIIVUE_VERSION__", NIIVUE_VERSION)
 
 
 def main() -> None:
