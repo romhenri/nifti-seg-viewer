@@ -12,8 +12,8 @@ from pathlib import Path
 
 NIIVUE_VERSION = "0.69.0"
 
-# Plain (non f-string) template so the JavaScript block can use braces freely.
-# The niivue version is injected via a single token replacement.
+# Plain (non f-string) template so the large JavaScript block can use braces
+# freely. The niivue version is injected via a single token replacement.
 HTML = """\
 <!doctype html>
 <html>
@@ -34,12 +34,21 @@ HTML = """\
       color: #777; font-size: 14px; text-align: center; pointer-events: none; }
     #hint small { color: #555; }
 
+    #opacityRow { display: none; }
+    #opacityRow input[type=range] { width: 120px; }
+
     #legend { position: absolute; top: 56px; right: 12px; width: 210px; max-height: calc(100vh - 80px);
       overflow-y: auto; background: rgba(24, 24, 24, 0.92); border: 1px solid #444; border-radius: 6px;
       padding: 8px 10px; font-size: 13px; display: none; backdrop-filter: blur(2px); }
     #legend h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #bbb;
       text-transform: uppercase; letter-spacing: 0.04em; }
-    .legend-row { display: flex; gap: 8px; align-items: center; padding: 3px 2px; border-radius: 4px; }
+    #legendActions { display: flex; gap: 6px; margin-bottom: 8px; }
+    #legendActions button { flex: 1; padding: 3px 0; font-size: 12px; }
+    .legend-row { display: flex; gap: 8px; align-items: center; padding: 3px 2px; cursor: pointer;
+      border-radius: 4px; user-select: none; }
+    .legend-row:hover { background: rgba(255, 255, 255, 0.06); }
+    .legend-row input[type=checkbox] { margin: 0; cursor: pointer; }
+    .legend-row.off .legend-name, .legend-row.off .swatch { opacity: 0.4; }
     .swatch { width: 14px; height: 14px; border-radius: 3px; flex: 0 0 auto;
       border: 1px solid rgba(255, 255, 255, 0.25); }
     .legend-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -58,11 +67,18 @@ HTML = """\
         <option value="4">Render</option>
       </select>
     </label>
+    <label id="opacityRow">Overlay opacity:
+      <input type="range" id="opacity" min="0" max="100" value="60" />
+    </label>
   </div>
   <canvas id="gl"></canvas>
 
   <div id="legend">
     <h3>Segmentation labels</h3>
+    <div id="legendActions">
+      <button id="allOn" type="button">All</button>
+      <button id="allOff" type="button">None</button>
+    </div>
     <div id="legendList"></div>
   </div>
 
@@ -99,11 +115,14 @@ HTML = """\
     const DEFAULT_OPACITY = 0.6;
 
     // Current segmentation overlay state.
-    //   seg = { vol, labels: [{ value, name, color: [r,g,b] }] }
+    //   seg = { vol, labels: [{ value, name, color: [r,g,b], on }] }
     let seg = null;
+    let overlayVol = null; // the loaded overlay NVImage (label map or continuous)
 
     const legend = document.getElementById('legend');
     const legendList = document.getElementById('legendList');
+    const opacityRow = document.getElementById('opacityRow');
+    const opacitySlider = document.getElementById('opacity');
 
     function fileToVolume(file, opts = {}) {
       return new Promise((resolve, reject) => {
@@ -132,13 +151,12 @@ HTML = """\
     }
 
     // Build a niivue label colormap from the current seg state. Index 0 is a
-    // transparent background. niivue turns this into a discrete lookup table,
-    // so each label keeps a flat color with no interpolation between values.
+    // transparent background; disabled labels get alpha 0 so they vanish.
     function buildColormap(labels) {
       const R = [0], G = [0], B = [0], A = [0], I = [0], names = ['background'];
       for (const l of labels) {
         R.push(l.color[0]); G.push(l.color[1]); B.push(l.color[2]);
-        A.push(255);
+        A.push(l.on ? 255 : 0);
         I.push(l.value);
         names.push(l.name);
       }
@@ -157,8 +175,17 @@ HTML = """\
       legendList.innerHTML = '';
       if (!seg) { legend.style.display = 'none'; return; }
       for (const l of seg.labels) {
-        const row = document.createElement('div');
-        row.className = 'legend-row';
+        const row = document.createElement('label');
+        row.className = 'legend-row' + (l.on ? '' : ' off');
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = l.on;
+        cb.addEventListener('change', () => {
+          l.on = cb.checked;
+          row.classList.toggle('off', !l.on);
+          applySeg();
+        });
 
         const sw = document.createElement('span');
         sw.className = 'swatch';
@@ -168,14 +195,31 @@ HTML = """\
         name.className = 'legend-name';
         name.textContent = l.name;
 
-        row.append(sw, name);
+        row.append(cb, sw, name);
         legendList.appendChild(row);
       }
       legend.style.display = 'block';
     }
 
+    function setAll(on) {
+      if (!seg) return;
+      seg.labels.forEach((l) => { l.on = on; });
+      applySeg();
+      renderLegend();
+    }
+    document.getElementById('allOn').addEventListener('click', () => setAll(true));
+    document.getElementById('allOff').addEventListener('click', () => setAll(false));
+
+    opacitySlider.addEventListener('input', () => {
+      if (!overlayVol) return;
+      const idx = nv.volumes.indexOf(overlayVol);
+      if (idx >= 0) nv.setOpacity(idx, opacitySlider.value / 100);
+    });
+
     function clearOverlayState() {
       seg = null;
+      overlayVol = null;
+      opacityRow.style.display = 'none';
       renderLegend();
     }
 
@@ -207,7 +251,7 @@ HTML = """\
 
         const overlay = await fileToVolume(f, { colormap: 'gray', opacity: DEFAULT_OPACITY });
         await nv.addVolume(overlay);
-        const overlayVol = nv.volumes[nv.volumes.length - 1];
+        overlayVol = nv.volumes[nv.volumes.length - 1];
 
         const values = detectLabels(overlayVol);
         if (values) {
@@ -217,6 +261,7 @@ HTML = """\
               value: v,
               name: 'Label ' + v,
               color: PALETTE[i % PALETTE.length],
+              on: true,
             })),
           };
           applySeg();
@@ -227,6 +272,8 @@ HTML = """\
           nv.updateGLVolume();
         }
 
+        opacitySlider.value = Math.round(DEFAULT_OPACITY * 100);
+        opacityRow.style.display = 'flex';
         hideHint();
       } catch (err) {
         alert('Could not load overlay: ' + err.message);
