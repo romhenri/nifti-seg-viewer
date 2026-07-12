@@ -33,6 +33,16 @@ HTML = """\
     #hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       color: #777; font-size: 14px; text-align: center; pointer-events: none; }
     #hint small { color: #555; }
+
+    #legend { position: absolute; top: 56px; right: 12px; width: 210px; max-height: calc(100vh - 80px);
+      overflow-y: auto; background: rgba(24, 24, 24, 0.92); border: 1px solid #444; border-radius: 6px;
+      padding: 8px 10px; font-size: 13px; display: none; backdrop-filter: blur(2px); }
+    #legend h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #bbb;
+      text-transform: uppercase; letter-spacing: 0.04em; }
+    .legend-row { display: flex; gap: 8px; align-items: center; padding: 3px 2px; border-radius: 4px; }
+    .swatch { width: 14px; height: 14px; border-radius: 3px; flex: 0 0 auto;
+      border: 1px solid rgba(255, 255, 255, 0.25); }
+    .legend-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   </style>
 </head>
 <body>
@@ -50,6 +60,12 @@ HTML = """\
     </label>
   </div>
   <canvas id="gl"></canvas>
+
+  <div id="legend">
+    <h3>Segmentation labels</h3>
+    <div id="legendList"></div>
+  </div>
+
   <div id="hint">
     Load a base NIfTI volume to start<br />
     <small>Everything runs locally &mdash; your data never leaves the browser.</small>
@@ -70,6 +86,25 @@ HTML = """\
     });
     nv.setSliceType(nv.sliceTypeMultiplanar);
 
+    // 20 visually distinct categorical colors (Sasha Trubetskoy's palette).
+    const PALETTE = [
+      [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48],
+      [145, 30, 180], [70, 240, 240], [240, 50, 230], [210, 245, 60], [250, 190, 212],
+      [0, 128, 128], [220, 190, 255], [170, 110, 40], [255, 250, 200], [128, 0, 0],
+      [170, 255, 195], [128, 128, 0], [255, 215, 180], [0, 0, 128], [128, 128, 128],
+    ];
+    // Above this many distinct values we assume the overlay is a continuous
+    // image, not a discrete label map, and fall back to a smooth colormap.
+    const MAX_LABELS = 64;
+    const DEFAULT_OPACITY = 0.6;
+
+    // Current segmentation overlay state.
+    //   seg = { vol, labels: [{ value, name, color: [r,g,b] }] }
+    let seg = null;
+
+    const legend = document.getElementById('legend');
+    const legendList = document.getElementById('legendList');
+
     function fileToVolume(file, opts = {}) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -79,11 +114,77 @@ HTML = """\
       });
     }
 
+    // Collect the unique integer label values (scaled intensities > 0) in a
+    // volume. Returns null when the data looks continuous rather than discrete.
+    function detectLabels(vol) {
+      const img = vol.img;
+      const slope = vol.hdr.scl_slope || 1;
+      const inter = vol.hdr.scl_inter || 0;
+      const seen = new Set();
+      for (let i = 0; i < img.length; i++) {
+        const v = img[i] * slope + inter;
+        if (v <= 0) continue;
+        if (Math.abs(v - Math.round(v)) > 1e-3) return null; // non-integer => continuous
+        seen.add(Math.round(v));
+        if (seen.size > MAX_LABELS) return null;
+      }
+      return seen.size ? [...seen].sort((a, b) => a - b) : null;
+    }
+
+    // Build a niivue label colormap from the current seg state. Index 0 is a
+    // transparent background. niivue turns this into a discrete lookup table,
+    // so each label keeps a flat color with no interpolation between values.
+    function buildColormap(labels) {
+      const R = [0], G = [0], B = [0], A = [0], I = [0], names = ['background'];
+      for (const l of labels) {
+        R.push(l.color[0]); G.push(l.color[1]); B.push(l.color[2]);
+        A.push(255);
+        I.push(l.value);
+        names.push(l.name);
+      }
+      return { R, G, B, A, I, labels: names };
+    }
+
+    function applySeg() {
+      if (!seg) return;
+      seg.vol.setColormapLabel(buildColormap(seg.labels));
+      nv.updateGLVolume();
+    }
+
+    const rgbCss = (c) => 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+
+    function renderLegend() {
+      legendList.innerHTML = '';
+      if (!seg) { legend.style.display = 'none'; return; }
+      for (const l of seg.labels) {
+        const row = document.createElement('div');
+        row.className = 'legend-row';
+
+        const sw = document.createElement('span');
+        sw.className = 'swatch';
+        sw.style.background = rgbCss(l.color);
+
+        const name = document.createElement('span');
+        name.className = 'legend-name';
+        name.textContent = l.name;
+
+        row.append(sw, name);
+        legendList.appendChild(row);
+      }
+      legend.style.display = 'block';
+    }
+
+    function clearOverlayState() {
+      seg = null;
+      renderLegend();
+    }
+
     document.getElementById('baseFile').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
       try {
         const vol = await fileToVolume(f, { colormap: 'gray', opacity: 1 });
-        await nv.loadVolumes([vol]);
+        await nv.loadVolumes([vol]); // replaces every volume, including overlays
+        clearOverlayState();
         hideHint();
       } catch (err) {
         alert('Could not load base volume: ' + err.message);
@@ -102,8 +203,30 @@ HTML = """\
         while (nv.volumes.length > 1) {
           nv.removeVolumeByIndex(nv.volumes.length - 1);
         }
-        const overlay = await fileToVolume(f, { colormap: 'redyell', opacity: 0.6, cal_min: 0.5, cal_max: 1 });
+        clearOverlayState();
+
+        const overlay = await fileToVolume(f, { colormap: 'gray', opacity: DEFAULT_OPACITY });
         await nv.addVolume(overlay);
+        const overlayVol = nv.volumes[nv.volumes.length - 1];
+
+        const values = detectLabels(overlayVol);
+        if (values) {
+          seg = {
+            vol: overlayVol,
+            labels: values.map((v, i) => ({
+              value: v,
+              name: 'Label ' + v,
+              color: PALETTE[i % PALETTE.length],
+            })),
+          };
+          applySeg();
+          renderLegend();
+        } else {
+          // Continuous overlay: keep the classic smooth heat colormap.
+          overlayVol.colormap = 'redyell';
+          nv.updateGLVolume();
+        }
+
         hideHint();
       } catch (err) {
         alert('Could not load overlay: ' + err.message);
